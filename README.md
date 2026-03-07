@@ -64,7 +64,7 @@ npm install
 npm start
 ```
 
-👥 ##Geliştirici Ekip
+## Geliştirici Ekip
 **Bu proje aşağıdaki ekip üyeleri tarafından geliştirilmektedir:**
 
 - **Burak Aydın - 1911012833**
