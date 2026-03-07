@@ -1,4 +1,3 @@
-# LegalDoc-Navigator
 # ⚖️ LegalDoc Navigator: Hukuk Metni Analiz Agent'ı
 
 ## 📖 Proje Özeti
@@ -63,3 +62,15 @@ uvicorn main:app --reload
 cd frontend
 npm install
 npm start
+```
+
+##👥 Geliştirici Ekip
+Bu proje aşağıdaki ekip üyeleri tarafından geliştirilmektedir:
+
+- **Burak Aydın - 1911012833
+
+- **Sedef Gizem Orulluoğlu - 2211012047
+
+- **Mert Acar - 2311012072
+
+
