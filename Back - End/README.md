@@ -64,9 +64,11 @@ uvicorn main:app --reload
 ## Ortam Degiskenleri
 
 `.env.example` dosyasinda asagidaki temel degiskenler bulunur:
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL`
-- `GEMINI_EMBEDDING_MODEL`
+- `LMSTUDIO_BASE_URL`
+- `LMSTUDIO_API_KEY`
+- `LMSTUDIO_MODEL`
+- `HF_EMBEDDING_MODEL`
+- `HF_EMBEDDING_BATCH_SIZE`
 - `VECTOR_DB_PROVIDER`
 - `CHROMA_PERSIST_DIR`
 - `CHROMA_COLLECTION_NAME`
@@ -82,9 +84,9 @@ uvicorn main:app --reload
 ## Akis
 1. PDF upload edilir.
 2. PDF metni cikartilir ve hukuki baglami koruyacak sekilde chunk'lanir.
-3. Chunk'lar Gemini embedding ile vektorlestirilir.
+3. Chunk'lar lokal HuggingFace embedding modeli ile vektorlestirilir.
 4. ChromaDB'ye persistent olarak yazilir.
-5. Sorgu geldigi zaman LangGraph ajan akisi calisir:
+5. Sorgu geldigi zaman LangGraph ajan akisi LM Studio (OpenAI uyumlu local server) uzerinden calisir:
 	 - Analyze Query
 	 - Retrieve
 	 - Grade Documents
@@ -128,5 +130,9 @@ curl -X POST "http://127.0.0.1:8000/api/v1/agent/query" \
 ```
 
 ## Bilinen Gereksinim
-- Basarili embedding/agent yaniti icin gecerli `GEMINI_API_KEY` zorunludur.
-- Bu anahtar tanimli degilse endpointler kontrollu sekilde `500` ve acik hata mesaji dondurur.
+- LM Studio'da Local Server acik olmali ve varsayilan olarak `http://localhost:1234/v1` adresinde erisilebilir olmalidir.
+- Embedding modeli degistiginde eski vektorlerin uyumsuz olmasini engellemek icin `./data/chroma` klasorunu temizleyin:
+	```bash
+	cd "Back - End"
+	/usr/bin/python3 scripts/clear_chroma.py
+	```

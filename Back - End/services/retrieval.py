@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from database.vector_store import ChromaVectorStore, RetrievedChunk, VectorStoreError
-from services.embedding import EmbeddingServiceError, GeminiEmbeddingService
+from services.embedding import EmbeddingServiceError, LocalEmbeddingService
 
 try:
 	from sentence_transformers import CrossEncoder
@@ -36,10 +36,10 @@ class RetrievalService:
 
 	def __init__(
 		self,
-		embedding_service: GeminiEmbeddingService | None = None,
+		embedding_service: LocalEmbeddingService | None = None,
 		vector_store: ChromaVectorStore | None = None,
 	) -> None:
-		self.embedding_service = embedding_service or GeminiEmbeddingService()
+		self.embedding_service = embedding_service or LocalEmbeddingService()
 		self.vector_store = vector_store or ChromaVectorStore()
 		self.reranker = self._load_reranker()
 

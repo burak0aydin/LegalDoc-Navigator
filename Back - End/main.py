@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,9 @@ from fastapi.responses import JSONResponse
 from api.routes import router as api_router
 from core.config import get_settings
 from core.logger import configure_logging
+
+
+load_dotenv()
 
 
 settings = get_settings()

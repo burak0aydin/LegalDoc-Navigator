@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -10,6 +11,9 @@ from typing import Any
 
 import chromadb
 from langchain_core.documents import Document
+
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStoreError(Exception):
@@ -56,11 +60,25 @@ class ChromaVectorStore:
 			metadata={"hnsw:space": "cosine"},
 		)
 
+	def _recreate_collection(self) -> None:
+		"""Recreate collection when dimensionality drift occurs."""
+		try:
+			self.client.delete_collection(name=self.config.collection_name)
+		except Exception:
+			# Best-effort delete; create_collection below is authoritative.
+			pass
+
+		self.collection = self.client.get_or_create_collection(
+			name=self.config.collection_name,
+			metadata={"hnsw:space": "cosine"},
+		)
+
 	def upsert_documents(
 		self,
 		documents: list[Document],
 		embeddings: list[list[float]],
 		source_id: str,
+		filename: str | None = None,
 	) -> list[str]:
 		"""Upsert document chunks and embeddings into persistent ChromaDB."""
 		if len(documents) != len(embeddings):
@@ -74,7 +92,17 @@ class ChromaVectorStore:
 			chunk_id = f"{source_id}:{index}"
 			ids.append(chunk_id)
 			payload_documents.append(doc.page_content)
-			payload_metadatas.append({**doc.metadata, "source_id": source_id})
+			metadata = {**doc.metadata, "source_id": source_id}
+			if filename:
+				metadata["filename"] = filename
+			payload_metadatas.append(metadata)
+
+		try:
+			# Keep source_id idempotent: remove previous chunks before rewriting.
+			self.collection.delete(where={"source_id": source_id})
+		except Exception:
+			# Deletion is best-effort; continue to upsert.
+			pass
 
 		try:
 			self.collection.upsert(
@@ -84,9 +112,86 @@ class ChromaVectorStore:
 				embeddings=embeddings,
 			)
 		except Exception as exc:  # noqa: BLE001
-			raise VectorStoreError(f"ChromaDB upsert hatasi: {exc}") from exc
+			message = str(exc).lower()
+			dimension_mismatch = "does not match collection dimensionality" in message
+			if not dimension_mismatch:
+				raise VectorStoreError(f"ChromaDB upsert hatasi: {exc}") from exc
+
+			logger.warning("Chroma dimension mismatch detected. Recreating collection and retrying upsert.")
+			try:
+				self._recreate_collection()
+				self.collection.upsert(
+					ids=ids,
+					documents=payload_documents,
+					metadatas=payload_metadatas,
+					embeddings=embeddings,
+				)
+			except Exception as retry_exc:  # noqa: BLE001
+				raise VectorStoreError(f"ChromaDB upsert hatasi: {retry_exc}") from retry_exc
 
 		return ids
+
+	def source_exists(self, source_id: str) -> bool:
+		"""Check if any chunks already exist for a source_id."""
+		try:
+			payload = self.collection.get(where={"source_id": source_id}, include=[])
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"Kaynak varlik kontrolu hatasi: {exc}") from exc
+
+		ids = payload.get("ids", [])
+		return bool(ids)
+
+	def filename_exists(self, filename: str) -> bool:
+		"""Check if any chunks already exist for a filename."""
+		try:
+			payload = self.collection.get(where={"filename": filename}, include=[])
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"Dosya adi varlik kontrolu hatasi: {exc}") from exc
+
+		ids = payload.get("ids", [])
+		return bool(ids)
+
+	def get_source_chunk_ids(self, source_id: str) -> list[str]:
+		"""Return existing chunk IDs for a source if present."""
+		try:
+			payload = self.collection.get(where={"source_id": source_id}, include=[])
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"Kaynak chunk id okuma hatasi: {exc}") from exc
+
+		return list(payload.get("ids", []))
+
+	def get_filename_chunk_ids(self, filename: str) -> list[str]:
+		"""Return existing chunk IDs for a filename if present."""
+		try:
+			payload = self.collection.get(where={"filename": filename}, include=[])
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"Dosya adi chunk id okuma hatasi: {exc}") from exc
+
+		return list(payload.get("ids", []))
+
+	def get_collection_dimension(self) -> int | None:
+		"""Return current collection embedding dimension when available."""
+		try:
+			payload = self.collection.peek(limit=1)
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"Koleksiyon boyut bilgisi okunamadi: {exc}") from exc
+
+		embeddings = payload.get("embeddings") if payload else None
+		if embeddings is None:
+			return None
+		try:
+			if len(embeddings) == 0:
+				return None
+		except TypeError:
+			return None
+
+		first = embeddings[0]
+		if first is None:
+			return None
+		try:
+			return len(first)
+		except TypeError:
+			return None
 
 	def similarity_search(
 		self,

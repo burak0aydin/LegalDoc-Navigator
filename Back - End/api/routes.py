@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from agent.graph import get_agent_graph
 from core.config import get_settings
 from database.vector_store import ChromaVectorStore, VectorStoreError
-from services.embedding import EmbeddingServiceError, GeminiEmbeddingService
+from services.embedding import EmbeddingServiceError, LocalEmbeddingService
 from services.pdf_processor import PDFProcessingError, ingest_pdf_to_chunks
 
 
@@ -51,11 +51,28 @@ class QueryResponse(BaseModel):
 async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 	"""Upload, process, embed, and index a legal PDF document."""
 	settings = get_settings()
+	incoming_filename = file.filename or "unknown.pdf"
 
 	try:
-		stored_path, chunks = await ingest_pdf_to_chunks(
+		vector_store = ChromaVectorStore()
+		if vector_store.filename_exists(incoming_filename):
+			existing_ids = vector_store.get_filename_chunk_ids(incoming_filename)
+			return UploadResponse(
+				message="Bu PDF daha once dosya adi bazinda indekslenmis. Tekrar eklenmedi.",
+				file_name=incoming_filename,
+				stored_path="",
+				chunks_count=len(existing_ids),
+				indexed_chunk_ids=existing_ids,
+			)
+	except VectorStoreError as exc:
+		logger.exception("Vector DB filename existence check failed")
+		raise HTTPException(status_code=500, detail=f"Vektor veritabani dosya adi kontrol hatasi: {exc}") from exc
+
+	try:
+		stored_path, file_hash, chunks = await ingest_pdf_to_chunks(
 			upload_file=file,
 			destination_dir=settings.upload_dir,
+			max_file_size_mb=settings.max_pdf_size_mb,
 			chunk_size=settings.chunk_size,
 			chunk_overlap=settings.chunk_overlap,
 		)
@@ -67,18 +84,19 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 		raise HTTPException(status_code=500, detail="PDF isleme asamasinda beklenmeyen hata olustu.") from exc
 
 	try:
-		embedding_service = GeminiEmbeddingService()
-		embeddings = await embedding_service.embed_texts([chunk.page_content for chunk in chunks])
+		embedding_service = LocalEmbeddingService()
+		texts = [chunk.page_content for chunk in chunks]
+		embeddings = await embedding_service.embed_texts(texts)
 	except EmbeddingServiceError as exc:
 		logger.exception("Embedding generation failed")
 		raise HTTPException(status_code=500, detail=f"Embedding olusturulamadi: {exc}") from exc
 
 	try:
-		vector_store = ChromaVectorStore()
 		indexed_chunk_ids = vector_store.upsert_documents(
 			documents=chunks,
 			embeddings=embeddings,
-			source_id=stored_path.stem,
+			source_id=file_hash,
+			filename=incoming_filename,
 		)
 	except VectorStoreError as exc:
 		logger.exception("Vector DB write failed")
@@ -86,7 +104,7 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 
 	return UploadResponse(
 		message="PDF basariyla yuklendi, islenip indekslendi.",
-		file_name=file.filename or "unknown.pdf",
+		file_name=incoming_filename,
 		stored_path=str(stored_path),
 		chunks_count=len(chunks),
 		indexed_chunk_ids=indexed_chunk_ids,

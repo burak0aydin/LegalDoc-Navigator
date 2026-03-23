@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
-import time
 from dataclasses import asdict
 from typing import Any, TypedDict
 
-import google.generativeai as genai
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-from services.retrieval import RetrievalResult, RetrievalService, RetrievalServiceError
+from services.retrieval import RetrievalService
 
 
 logger = logging.getLogger(__name__)
@@ -51,45 +50,38 @@ def _get_state_int(state: AgentState, key: str, default: int) -> int:
 		return default
 
 
-async def _call_gemini_with_retry(
-	prompt: str,
-	*,
-	timeout_sec: int = 45,
-	max_retries: int = 3,
-	retry_delay_sec: float = 1.0,
-) -> str:
-	"""Run Gemini generation with timeout and retry handling."""
-	api_key = os.getenv("GEMINI_API_KEY", "").strip()
-	if not api_key:
-		raise AgentNodeError("GEMINI_API_KEY bulunamadi.")
+def _build_local_llm() -> ChatOpenAI:
+	"""Create LM Studio-backed ChatOpenAI client."""
+	return ChatOpenAI(
+		base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+		api_key=os.getenv("LMSTUDIO_API_KEY", "lm-studio"),
+		model=os.getenv("LMSTUDIO_MODEL", "gemma-3-4b-it"),
+		temperature=0.1,
+	)
 
-	model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-	genai.configure(api_key=api_key)
-	model = genai.GenerativeModel(model_name)
 
-	delay = retry_delay_sec
-	for attempt in range(1, max_retries + 1):
-		try:
-			response = await asyncio.wait_for(
-				asyncio.to_thread(model.generate_content, prompt),
-				timeout=timeout_sec,
-			)
-			text = getattr(response, "text", "") or ""
-			if text.strip():
-				return text.strip()
-			raise AgentNodeError("Gemini bos yanit dondurdu.")
-		except asyncio.TimeoutError as exc:
-			if attempt == max_retries:
-				raise AgentNodeError("Gemini cagrisinda timeout olustu.") from exc
-		except Exception as exc:  # noqa: BLE001
-			message = str(exc).lower()
-			retryable = any(token in message for token in ["429", "rate", "quota", "timeout", "unavailable"])
-			if attempt == max_retries or not retryable:
-				raise AgentNodeError(f"Gemini cagrisi basarisiz: {exc}") from exc
-		time.sleep(delay)
-		delay *= 2
+async def _call_llm(prompt: str, *, system_message: str | None = None) -> str:
+	"""Call LM Studio directly and fail hard on connection/generation errors."""
+	try:
+		llm = _build_local_llm()
+		messages = []
+		if system_message:
+			messages.append(SystemMessage(content=system_message))
+		messages.append(HumanMessage(content=prompt))
 
-	raise AgentNodeError("Gemini yanit uretemedi.")
+		response = await llm.ainvoke(messages)
+		text = response.content if isinstance(response.content, str) else str(response.content)
+		if not text or not text.strip():
+			raise AgentNodeError("LM Studio bos yanit dondurdu.")
+		return text.strip()
+	except Exception as e:  # noqa: BLE001
+		logger.error(
+			"LM Studio Bağlantı Hatası: Lütfen LM Studio'da Local Server'ı başlattığınızdan emin olun. | detail=%s",
+			e,
+		)
+		raise AgentNodeError(
+			"LM Studio Bağlantı Hatası: Lütfen LM Studio'da Local Server'ı başlattığınızdan emin olun."
+		) from e
 
 
 async def analyze_query_node(state: AgentState) -> AgentState:
@@ -104,11 +96,7 @@ async def analyze_query_node(state: AgentState) -> AgentState:
 		"Cikti sadece yeniden yazilmis sorgu olsun.\n\n"
 		f"Soru: {query}"
 	)
-
-	try:
-		intent = await _call_gemini_with_retry(intent_prompt, timeout_sec=30, max_retries=2)
-	except AgentNodeError:
-		intent = query
+	intent = await _call_llm(intent_prompt)
 
 	logger.info("node=analyze_query completed | normalized_query=%s", query)
 
@@ -134,24 +122,11 @@ async def retrieve_documents_node(state: AgentState) -> AgentState:
 	attempts = _get_state_int(state, "attempts", 0) + 1
 
 	retrieval_service = RetrievalService()
-	try:
-		results = await retrieval_service.search(
-			query=query,
-			top_k=top_k,
-			rerank_top_n=rerank_top_n,
-		)
-	except RetrievalServiceError as exc:
-		errors = list(state.get("errors", []))
-		errors.append(f"Retrieve node hatasi: {exc}")
-		logger.warning("node=retrieve_documents failed | error=%s", exc)
-		return {
-			**state,
-			"attempts": attempts,
-			"retrieval_results": [],
-			"relevant_results": [],
-			"should_retry": attempts < _get_state_int(state, "max_attempts", 2),
-			"errors": errors,
-		}
+	results = await retrieval_service.search(
+		query=query,
+		top_k=top_k,
+		rerank_top_n=rerank_top_n,
+	)
 
 	serialized = [asdict(item) for item in results]
 	logger.info("node=retrieve_documents completed | result_count=%s", len(serialized))
@@ -170,123 +145,6 @@ def _parse_grade_output(output: str, max_index: int) -> list[int]:
 		if 1 <= value <= max_index and value not in indices:
 			indices.append(value)
 	return indices
-
-
-def _tokenize_for_overlap(text: str) -> set[str]:
-	"""Simple tokenizer for lexical fallback ranking."""
-	tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
-	return {token for token in tokens if len(token) >= 3}
-
-
-def _normalize_tr_text(text: str) -> str:
-	"""Normalize Turkish-specific chars to ASCII-like lowercase for matching."""
-	translation = str.maketrans({
-		"Ç": "c",
-		"Ğ": "g",
-		"İ": "i",
-		"I": "i",
-		"Ö": "o",
-		"Ş": "s",
-		"Ü": "u",
-		"ç": "c",
-		"ğ": "g",
-		"ı": "i",
-		"ö": "o",
-		"ş": "s",
-		"ü": "u",
-	})
-	return text.translate(translation).lower()
-
-
-def _select_by_keyword_overlap(query: str, retrieved: list[dict[str, Any]], max_items: int = 3) -> list[int]:
-	"""Return 1-based indices ranked by query-token overlap with chunk content."""
-	query_tokens = _tokenize_for_overlap(query)
-	if not query_tokens:
-		return [1] if retrieved else []
-
-	scored: list[tuple[int, int]] = []
-	for index, item in enumerate(retrieved, start=1):
-		content = str(item.get("content", ""))
-		content_tokens = _tokenize_for_overlap(content)
-		overlap = len(query_tokens.intersection(content_tokens))
-		scored.append((index, overlap))
-
-	scored.sort(key=lambda pair: pair[1], reverse=True)
-	selected = [idx for idx, score in scored if score > 0][:max_items]
-	if selected:
-		return selected
-	return [idx for idx, _ in scored[:1]] if scored else []
-
-
-def _derive_direct_conclusion(query: str, relevant: list[dict[str, Any]]) -> str | None:
-	"""Extract a concise legal conclusion from retrieved context when possible."""
-	norm_query = _normalize_tr_text(query)
-	needs_self_defense_rule = all(token in norm_query for token in ["savunma", "sinir", "asil"])
-	if not needs_self_defense_rule:
-		return None
-
-	for item in relevant:
-		content = str(item.get("content", ""))
-		norm_content = _normalize_tr_text(content)
-		if "madde 27" not in norm_content and "sinirin asilmasi" not in norm_content:
-			continue
-
-		if "ceza verilmez" in norm_content:
-			return (
-				"Mesru savunmada sinirin asilmasi mazur gorulebilecek bir heyecan, korku veya telastan "
-				"ileri gelmisse faile ceza verilmez (TCK m.27/2)."
-			)
-
-	return None
-
-
-def _build_local_markdown_report(query: str, relevant: list[dict[str, Any]]) -> str:
-	"""Create a useful markdown response without LLM generation.
-
-	This fallback keeps the agent functional when external generation fails
-	(e.g. quota/model/network issues).
-	"""
-	max_sources = min(len(relevant), 3)
-	selected = relevant[:max_sources]
-
-	dayanaklar: list[str] = []
-	for idx, item in enumerate(selected, start=1):
-		metadata = item.get("metadata", {})
-		source = str(metadata.get("source", "bilinmiyor"))
-		chunk_index = metadata.get("chunk_index")
-		content = re.sub(r"\s+", " ", str(item.get("content", "")).strip())
-		excerpt = content[:500] + ("..." if len(content) > 500 else "")
-		chunk_label = f", parcacik #{chunk_index}" if chunk_index is not None else ""
-		dayanaklar.append(f"- Kaynak {idx}: {source}{chunk_label}\n  - Alinti: {excerpt}")
-
-	if not dayanaklar:
-		dayanaklar.append("- Kaynak bulunamadi.")
-
-	degerlendirme = (
-		"Sistem, ilgili kaynak metinlerden secilen bolumleri listeler. "
-		"Kesin hukuki kanaat yerine metin temelli bir on-degerlendirme sunar. "
-		"Nihai yorum icin tam metin ve guncel mevzuat birlikte incelenmelidir."
-	)
-	direct_conclusion = _derive_direct_conclusion(query, relevant)
-	sonuc = direct_conclusion or (
-		"Bu soruya iliskin dogrudan hukmi otomatik olarak cikaramadim; "
-		"asagidaki dayanaklardan manuel dogrulama yapabilirsiniz."
-	)
-
-	return (
-		"## Ozet\n"
-		f"Soru: {query}\n\n"
-		"Gemini servisinde gecici bir sorun oldugu icin yanit yerel fallback modunda olusturuldu. "
-		"Asagida soruyla en ilgili kaynak bolumleri listelenmistir.\n\n"
-		"## Sonuc\n"
-		f"{sonuc}\n\n"
-		"## Dayanaklar\n"
-		f"{chr(10).join(dayanaklar)}\n\n"
-		"## Degerlendirme\n"
-		f"{degerlendirme}\n\n"
-		"## Uyari\n"
-		"Bu cikti hukuki tavsiye degildir; avukat incelemesi yerine gecmez."
-	)
 
 
 async def grade_documents_node(state: AgentState) -> AgentState:
@@ -317,15 +175,8 @@ async def grade_documents_node(state: AgentState) -> AgentState:
 		"Parcaciklar:\n"
 		+ "\n\n".join(preview_lines)
 	)
-
-	try:
-		grade_output = await _call_gemini_with_retry(prompt, timeout_sec=35, max_retries=2)
-		selected = _parse_grade_output(grade_output, max_index=len(retrieved))
-	except AgentNodeError as exc:
-		errors = list(state.get("errors", []))
-		errors.append(f"Grade node LLM hatasi: {exc}")
-		selected = _select_by_keyword_overlap(query=query, retrieved=retrieved, max_items=3)
-		state = {**state, "errors": errors}
+	grade_output = await _call_llm(prompt)
+	selected = _parse_grade_output(grade_output, max_index=len(retrieved))
 
 	relevant = [retrieved[i - 1] for i in selected] if selected else []
 	should_retry = not relevant and attempts < max_attempts
@@ -356,7 +207,7 @@ async def generate_answer_node(state: AgentState) -> AgentState:
 			"### Oneri\n"
 			"- Soruyu daha spesifik bir kanun maddesi, tarih veya kurum baglaminda yeniden sorabilirsiniz."
 		)
-		logger.info("node=generate_answer fallback_response_generated")
+		logger.info("node=generate_answer no_relevant_results")
 		return {**state, "answer_markdown": fallback}
 
 	context_blocks = []
@@ -365,24 +216,18 @@ async def generate_answer_node(state: AgentState) -> AgentState:
 		content = item.get("content", "")
 		context_blocks.append(f"Kaynak {idx} ({source}):\n{content}")
 
+	system_prompt = (
+		"Sen kıdemli bir hukuk asistanısın. Sana sağlanan 'Kaynak Metinler' (Context) bölümündeki maddeleri "
+		"kullanarak kullanıcının sorusuna net ve kesin bir yanıt ver. Soruya yanıt verirken ilgili Kanun "
+		"maddesini (Örn: TCK m. 28) mutlaka belirt. Eğer sağlanan kaynaklarda sorunun cevabı YOKSA, varsayım "
+		"yapma ve 'Bu kaynaklarda cevaba ulaşılamadı' de."
+	)
 	prompt = (
-		"Sen bir hukuk metni analiz asistanisin. Asagidaki kaynaklara dayanarak cevap ver. "
-		"Cevabi Markdown formatinda yaz.\n"
-		"Bolumler: Ozet, Dayanaklar, Degerlendirme, Uyari.\n"
-		"Kesin hukum vermeden, kaynak baglamina sadik kal.\n\n"
 		f"Soru: {query}\n\n"
-		"Kaynaklar:\n"
+		"Kaynak Metinler:\n"
 		+ "\n\n".join(context_blocks)
 	)
 
-	try:
-		answer = await _call_gemini_with_retry(prompt, timeout_sec=60, max_retries=3)
-	except AgentNodeError as exc:
-		errors = list(state.get("errors", []))
-		errors.append(f"Generate node hatasi: {exc}")
-		answer = _build_local_markdown_report(query=query, relevant=relevant)
-		logger.warning("node=generate_answer failed | error=%s", exc)
-		return {**state, "answer_markdown": answer, "errors": errors}
-
+	answer = await _call_llm(prompt, system_message=system_prompt)
 	logger.info("node=generate_answer completed")
 	return {**state, "answer_markdown": answer}

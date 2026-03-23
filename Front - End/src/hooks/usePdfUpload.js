@@ -30,8 +30,10 @@ export function usePdfUpload() {
       return data;
     } catch (error) {
       const detail = error?.response?.data?.detail
-        || (error?.request ? "Sunucuya ulasilamadi. Backend calisiyor mu ve CORS ayari dogru mu kontrol edin." : null)
+        || error?.response?.data?.message
+        || error?.response?.data?.error
         || error?.message
+        || (error?.request ? "Sunucuya ulasilamadi. Backend calisiyor mu ve CORS ayari dogru mu kontrol edin." : null)
         || "Yukleme sirasinda hata olustu.";
       setUploadError(String(detail));
       return null;

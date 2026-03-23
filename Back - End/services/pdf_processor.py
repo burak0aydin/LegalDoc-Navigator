@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
-from uuid import uuid4
 
 import fitz
 from fastapi import UploadFile
@@ -20,6 +20,8 @@ class PDFProcessingError(Exception):
 ALLOWED_EXTENSIONS = {".pdf"}
 DEFAULT_MAX_FILE_SIZE_MB = 40
 DEFAULT_PARSE_TIMEOUT_SEC = 90
+DEFAULT_CHUNK_SIZE = 2000
+DEFAULT_CHUNK_OVERLAP = 500
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -51,7 +53,7 @@ async def save_uploaded_pdf(
 	upload_file: UploadFile,
 	destination_dir: str | Path,
 	max_file_size_mb: int = DEFAULT_MAX_FILE_SIZE_MB,
-) -> Path:
+) -> tuple[Path, str]:
 	"""Persist uploaded PDF securely to disk.
 
 	Raises:
@@ -83,14 +85,16 @@ async def save_uploaded_pdf(
 	target_dir.mkdir(parents=True, exist_ok=True)
 
 	safe_name = _sanitize_filename(upload_file.filename)
-	target_path = target_dir / f"{uuid4().hex}_{safe_name}"
+	file_hash = hashlib.sha256(file_bytes).hexdigest()
+	target_path = target_dir / f"{file_hash[:12]}_{safe_name}"
 
 	try:
-		await asyncio.to_thread(target_path.write_bytes, file_bytes)
+		if not target_path.exists():
+			await asyncio.to_thread(target_path.write_bytes, file_bytes)
 	except Exception as exc:
 		raise PDFProcessingError("Yuklenen PDF diske kaydedilemedi.") from exc
 
-	return target_path
+	return target_path, file_hash
 
 
 async def extract_text_from_pdf(
@@ -126,23 +130,23 @@ async def extract_text_from_pdf(
 def chunk_legal_text(
 	text: str,
 	source_name: str,
-	chunk_size: int = 1400,
-	chunk_overlap: int = 250,
+	chunk_size: int = DEFAULT_CHUNK_SIZE,
+	chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[Document]:
 	"""Split legal text into context-preserving chunks for downstream RAG."""
 
 	if not text or not text.strip():
 		raise PDFProcessingError("Chunkleme icin gecerli metin bulunamadi.")
 
+	# Improve article boundary detection so legal clauses are less likely to split mid-rule.
+	text = re.sub(r"(?<!\n)(Madde\s+\d+\s*-)", r"\n\1", text)
+
 	splitter = RecursiveCharacterTextSplitter(
 		chunk_size=chunk_size,
 		chunk_overlap=chunk_overlap,
 		separators=[
-			"\nMADDE ",
-			"\nMadde ",
 			"\n\n",
 			"\n",
-			". ",
 			" ",
 			"",
 		],
@@ -165,12 +169,17 @@ def chunk_legal_text(
 async def ingest_pdf_to_chunks(
 	upload_file: UploadFile,
 	destination_dir: str | Path,
-	chunk_size: int = 1400,
-	chunk_overlap: int = 250,
-) -> tuple[Path, list[Document]]:
+	max_file_size_mb: int = DEFAULT_MAX_FILE_SIZE_MB,
+	chunk_size: int = DEFAULT_CHUNK_SIZE,
+	chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> tuple[Path, str, list[Document]]:
 	"""End-to-end helper for upload -> extract -> chunk pipeline."""
 
-	stored_path = await save_uploaded_pdf(upload_file, destination_dir)
+	stored_path, file_hash = await save_uploaded_pdf(
+		upload_file,
+		destination_dir,
+		max_file_size_mb=max_file_size_mb,
+	)
 	text = await extract_text_from_pdf(stored_path)
 	chunks = chunk_legal_text(text, source_name=stored_path.name, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-	return stored_path, chunks
+	return stored_path, file_hash, chunks

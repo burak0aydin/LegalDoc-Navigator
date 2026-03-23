@@ -42,15 +42,15 @@ export default function QueryPanel({ isQuerying, queryError, result, meta, onAsk
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{result}</ReactMarkdown>
           </article>
         ) : (
-          <p className="mt-3 text-sm text-slate-500">Rapor burada goruntulenecek.</p>
+          <p className="mt-3 text-sm text-slate-500">Rapor burada görüntülenecek.</p>
         )}
       </div>
 
       {meta ? (
         <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-600 sm:grid-cols-3">
           <span className="rounded bg-slate-100 px-2 py-1">Deneme: {meta.attempts}</span>
-          <span className="rounded bg-slate-100 px-2 py-1">Ilgili kaynak: {meta.relevant_results_count}</span>
-          <span className="rounded bg-slate-100 px-2 py-1">Hata kaydi: {meta.errors?.length ?? 0}</span>
+          <span className="rounded bg-slate-100 px-2 py-1">İlgili kaynak: {meta.relevant_results_count}</span>
+          <span className="rounded bg-slate-100 px-2 py-1">Hata kaydı: {meta.errors?.length ?? 0}</span>
         </div>
       ) : null}
     </section>

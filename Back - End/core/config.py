@@ -40,7 +40,7 @@ def get_settings() -> Settings:
 	"""Return cached application settings."""
 	raw_origins = os.getenv(
 		"CORS_ORIGINS",
-		"http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+		"http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174,http://127.0.0.1:4174,http://localhost:3000,http://127.0.0.1:3000",
 	)
 	cors_origins = [item.strip() for item in raw_origins.split(",") if item.strip()]
 
@@ -54,7 +54,7 @@ def get_settings() -> Settings:
 		api_v1_prefix=os.getenv("API_V1_PREFIX", "/api/v1"),
 		cors_origins=cors_origins,
 		upload_dir=upload_dir,
-		chunk_size=_get_int("PDF_CHUNK_SIZE", 1400),
-		chunk_overlap=_get_int("PDF_CHUNK_OVERLAP", 250),
+		chunk_size=_get_int("PDF_CHUNK_SIZE", 2000),
+		chunk_overlap=_get_int("PDF_CHUNK_OVERLAP", 500),
 		max_pdf_size_mb=_get_int("PDF_MAX_FILE_SIZE_MB", 40),
 	)
