@@ -38,7 +38,10 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
 	"""Return cached application settings."""
-	raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+	raw_origins = os.getenv(
+		"CORS_ORIGINS",
+		"http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+	)
 	cors_origins = [item.strip() for item in raw_origins.split(",") if item.strip()]
 
 	upload_dir = Path(os.getenv("UPLOAD_DIR", "./data/uploads"))

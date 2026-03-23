@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -125,3 +126,61 @@ class ChromaVectorStore:
 			)
 
 		return chunks
+
+	def keyword_search(
+		self,
+		query: str,
+		top_k: int = 8,
+		filters: dict[str, Any] | None = None,
+	) -> list[RetrievedChunk]:
+		"""Run lexical keyword search over stored chunks for exact-term recall.
+
+		This method complements embedding search when model quality or language
+		coverage is limited.
+		"""
+		if not query.strip():
+			return []
+
+		def tokenize(text: str) -> set[str]:
+			tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
+			return {token for token in tokens if len(token) >= 3}
+
+		query_tokens = tokenize(query)
+		if not query_tokens:
+			return []
+
+		try:
+			payload = self.collection.get(where=filters, include=["documents", "metadatas"])
+		except Exception as exc:  # noqa: BLE001
+			raise VectorStoreError(f"ChromaDB keyword search hatasi: {exc}") from exc
+
+		ids = payload.get("ids", [])
+		docs = payload.get("documents", [])
+		metas = payload.get("metadatas", [])
+
+		scored: list[tuple[str, str, dict[str, Any], float]] = []
+		for idx, chunk_id in enumerate(ids):
+			content = docs[idx] if idx < len(docs) and docs[idx] else ""
+			if not content:
+				continue
+			content_tokens = tokenize(content)
+			overlap = len(query_tokens.intersection(content_tokens))
+			if overlap <= 0:
+				continue
+			score = overlap / max(len(query_tokens), 1)
+			metadata = metas[idx] if idx < len(metas) and metas[idx] else {}
+			scored.append((chunk_id, content, metadata, float(score)))
+
+		scored.sort(key=lambda item: item[3], reverse=True)
+		results: list[RetrievedChunk] = []
+		for chunk_id, content, metadata, score in scored[:top_k]:
+			results.append(
+				RetrievedChunk(
+					chunk_id=chunk_id,
+					content=content,
+					metadata=metadata,
+					score=score,
+				)
+			)
+
+		return results

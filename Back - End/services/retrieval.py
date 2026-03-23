@@ -123,4 +123,28 @@ class RetrievalService:
 		except VectorStoreError as exc:
 			raise RetrievalServiceError(f"Vektor arama basarisiz: {exc}") from exc
 
-		return await self._rerank_chunks(query, raw_chunks, rerank_top_n=rerank_top_n)
+		# Hybrid recall: add lexical matches for legal phrase-heavy queries.
+		try:
+			keyword_chunks = self.vector_store.keyword_search(
+				query=query,
+				top_k=max(top_k, rerank_top_n),
+				filters=filters,
+			)
+		except VectorStoreError:
+			keyword_chunks = []
+
+		merged: dict[str, RetrievedChunk] = {}
+		for chunk in raw_chunks:
+			merged[chunk.chunk_id] = chunk
+		for chunk in keyword_chunks:
+			existing = merged.get(chunk.chunk_id)
+			if existing is None:
+				merged[chunk.chunk_id] = chunk
+			else:
+				# Keep richer score signal between semantic and lexical retrieval.
+				existing.score = max(existing.score, chunk.score)
+
+		candidate_chunks = list(merged.values())
+		candidate_chunks.sort(key=lambda item: item.score, reverse=True)
+
+		return await self._rerank_chunks(query, candidate_chunks, rerank_top_n=rerank_top_n)
