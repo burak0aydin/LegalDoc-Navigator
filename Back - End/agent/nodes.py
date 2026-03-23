@@ -57,6 +57,8 @@ def _build_local_llm() -> ChatOpenAI:
 		api_key=os.getenv("LMSTUDIO_API_KEY", "lm-studio"),
 		model=os.getenv("LMSTUDIO_MODEL", "gemma-3-4b-it"),
 		temperature=0.1,
+		timeout=float(os.getenv("LMSTUDIO_TIMEOUT_SEC", "600")),
+		max_retries=0,
 	)
 
 

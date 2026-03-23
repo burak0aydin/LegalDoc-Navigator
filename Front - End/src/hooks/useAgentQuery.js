@@ -22,7 +22,9 @@ export function useAgentQuery() {
       setMeta(data);
       return data;
     } catch (error) {
-      const detail = error?.response?.data?.detail || "Sorgu sirasinda hata olustu.";
+      const detail = error?.code === "ECONNABORTED"
+        ? "Yerel model yaniti gec geliyor. Istek zaman asimina ugradi; bekleme suresi arttirildiysa sayfayi yenileyip tekrar deneyin."
+        : (error?.response?.data?.detail || "Sorgu sirasinda hata olustu.");
       setQueryError(String(detail));
       return null;
     } finally {
