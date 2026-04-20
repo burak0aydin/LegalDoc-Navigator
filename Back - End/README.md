@@ -5,33 +5,33 @@ Bu klasor, LegalDoc Navigator projesinin FastAPI tabanli backend katmanini iceri
 ## Klasor Yapisi
 
 ```text
-Back - End/
-├── api/
-│   ├── __init__.py
-│   └── routes.py
-├── core/
-│   ├── __init__.py
-│   ├── config.py
-│   └── logger.py
-├── data/
-│   └── .gitkeep
-├── database/
-│   ├── __init__.py
-│   └── vector_store.py
-├── services/
-│   ├── __init__.py
-│   ├── pdf_processor.py
-│   ├── embedding.py
-│   └── retrieval.py
-├── agent/
-│   ├── __init__.py
-│   ├── graph.py
-│   └── nodes.py
-├── .env.example
-├── .gitignore
-├── requirements.txt
-├── main.py
-└── README.md
+Back - End/                      -> Backend ana klasoru
+├── api/                         -> HTTP endpoint katmani
+│   ├── __init__.py              -> api paket tanimi
+│   └── routes.py                -> upload ve query route tanimlari
+├── core/                        -> ortak ayar ve log altyapisi
+│   ├── __init__.py              -> core paket tanimi
+│   ├── config.py                -> .env tabanli uygulama ayarlari
+│   └── logger.py                -> merkezi log konfigurasyonu
+├── data/                        -> yuklenen dosyalar ve lokal veri dizinleri
+│   └── .gitkeep                 -> bos klasoru gitte tutma dosyasi
+├── database/                    -> vektor veritabani erisim katmani
+│   ├── __init__.py              -> database paket tanimi
+│   └── vector_store.py          -> ChromaDB upsert ve arama islemleri
+├── services/                    -> is kurallari ve servisler
+│   ├── __init__.py              -> services paket tanimi
+│   ├── pdf_processor.py         -> PDF kaydetme, metin cikarma, chunklama
+│   ├── embedding.py             -> embedding modeli ile vektor uretimi
+│   └── retrieval.py             -> semantik arama + reranking akisi
+├── agent/                       -> LangGraph agent akisi
+│   ├── __init__.py              -> agent paket tanimi
+│   ├── graph.py                 -> graph dugum ve route baglantilari
+│   └── nodes.py                 -> analyze/retrieve/grade/generate dugumleri
+├── .env.example                 -> ortam degiskenleri sablonu
+├── .gitignore                   -> git tarafinda dislanacak dosyalar
+├── requirements.txt             -> Python bagimlilik listesi
+├── main.py                      -> FastAPI uygulama giris noktasi
+└── README.md                    -> backend dokumantasyonu
 ```
 
 ## Python Sanal Ortam (venv) Kurulumu
